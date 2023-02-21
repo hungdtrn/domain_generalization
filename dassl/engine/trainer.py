@@ -30,6 +30,7 @@ class SimpleNet(nn.Module):
             model_cfg.BACKBONE.NAME,
             verbose=cfg.VERBOSE,
             pretrained=model_cfg.BACKBONE.PRETRAINED,
+            cfg = model_cfg.BACKBONE,
             **kwargs,
         )
         fdim = self.backbone.out_features
@@ -66,7 +67,10 @@ class SimpleNet(nn.Module):
         if self.classifier is None:
             return f
 
-        y = self.classifier(f)
+        if type(f) == tuple:
+            y = self.classifier(f[0])
+        else:
+            y = self.classifier(f)
 
         if return_feature:
             return y, f

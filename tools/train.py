@@ -1,5 +1,6 @@
 import argparse
 import torch
+from yacs.config import CfgNode as CN
 
 from dassl.utils import setup_logger, set_random_seed, collect_env_info
 from dassl.config import clean_cfg, get_cfg_default
@@ -48,6 +49,10 @@ def reset_cfg(cfg, args):
     if args.backbone:
         cfg.MODEL.BACKBONE.NAME = args.backbone
 
+    if args.attn:
+        cfg.MODEL.BACKBONE.ATTN.TYPE = args.attn
+    cfg.MODEL.BACKBONE.ATTN.SPARSE_RES = args.sparse_res
+
     if args.head:
         cfg.MODEL.HEAD.NAME = args.head
 
@@ -63,7 +68,9 @@ def extend_cfg(cfg):
         cfg.TRAINER.MY_MODEL.PARAM_B = 0.5
         cfg.TRAINER.MY_MODEL.PARAM_C = False
     """
-    pass
+    cfg.MODEL.BACKBONE.ATTN = CN()
+    cfg.MODEL.BACKBONE.ATTN.TYPE = "inlay"
+    cfg.MODEL.BACKBONE.ATTN.SPARSE_RES = False
 
 
 def setup_cfg(args):
@@ -97,7 +104,8 @@ def main(args):
         set_random_seed(cfg.SEED)
     setup_logger(cfg.OUTPUT_DIR)
 
-    if torch.cuda.is_available() and cfg.USE_CUDA:
+    if torch.cuda.is_available() and cfg.USE_CUDA and cfg.SEED < 0:
+        print("setting bench mark")
         torch.backends.cudnn.benchmark = True
 
     print_args(args, cfg)
@@ -163,6 +171,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--backbone", type=str, default="", help="name of CNN backbone"
     )
+    
+    parser.add_argument(
+        "--attn", type=str, default="", help="name of the attention type"
+    )
+    parser.add_argument(
+        "--sparse_res", action="store_true", help="inLay has sparse residual"
+    )
+
+    
     parser.add_argument("--head", type=str, default="", help="name of head")
     parser.add_argument(
         "--eval-only", action="store_true", help="evaluation only"

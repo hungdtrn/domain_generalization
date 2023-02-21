@@ -1,0 +1,20 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceRoot}/tools/train.py",
+            "args": ["--root", "/home/tduy/Workspace/dataset/domain_generalization/", 
+                "--trainer", "Vanilla", 
+                "--source-domains", "art_painting", "cartoon", "photo", 
+                "--target-domains", "sketch", 
+                "--dataset-config-file", "configs/datasets/dg/pacs.yaml", 
+                "--config-file", "configs/trainers/dg/vanilla/pacs.yaml", 
+                "--output-dir", "output/vanilla_pacs_ind_debug", 
+                "--backbone", "ind",
+                "--attn", "inlay_selective"]
+        }
+    ]
+}

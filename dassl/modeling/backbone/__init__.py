@@ -21,3 +21,4 @@ from .resnet_dynamic import *
 from .cnn_digitsingle import cnn_digitsingle
 from .preact_resnet18 import preact_resnet18
 from .cnn_digit5_m3sda import cnn_digit5_m3sda
+from .resnet_inLay import CustomAttention
