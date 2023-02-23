@@ -70,7 +70,51 @@ def reshape_from_batch(x, num_heads, is_rel=False):
             .reshape(batch_size, seq_len, out_dim)
 
 
-class ResnetFeature(ResNet):
+class ResnetFeature(ResNet):        
+    def __init__(
+        self, img_size=224, cp_layer=4, **kwargs
+    ):
+        super().__init__(**kwargs)
+        
+        self.cp_layer = cp_layer
+        if self.cp_layer == 4:
+            self.out_dim = 512
+            self.num_tokens = (img_size // 32)**2
+        elif self.cp_layer == 3:
+            self.out_dim = 256
+            self.num_tokens = (img_size // 16) ** 2
+            del self.layer4
+        elif self.cp_layer == 2:
+            self.out_dim = 128
+            self.num_tokens = (img_size // 8) ** 2
+            del self.layer3
+            del self.layer4
+        else:
+            raise Exception("Parameter is not correct")  
+        
+    def featuremaps(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = self.layer1(x)
+        if "layer1" in self.ms_layers:
+            x = self.mixstyle(x)
+        x = self.layer2(x)
+        
+        if self.cp_layer >= 3:
+            if "layer2" in self.ms_layers:
+                x = self.mixstyle(x)
+            x = self.layer3(x)
+            
+        if self.cp_layer >= 4:            
+            if "layer3" in self.ms_layers:
+                x = self.mixstyle(x)
+            x = self.layer4(x)
+
+        return x
+
+        
     def forward(self, x):
         f = self.featuremaps(x)
         B, d, _, _ = f.shape
@@ -98,38 +142,37 @@ class SparseResidual(nn.Module):
             tmp = (mask > 0).float()
             mask = mask + tmp * self.thresh
         
-        print(mask)
+        # print(mask)
         return tokens * (1 - mask) + mask * self.mlp(x)
         
 
-
-
 class InLay(nn.Module):
-    def __init__(self, has_sparse_res=False, dropout=0.1) -> None:
+    def __init__(self, dim=512, num_tokens=49, learnable_dim=512, 
+                 has_sparse_res=False, dropout=0.0) -> None:
         super().__init__()
         
-        self.linear_q = nn.Sequential(nn.Linear(512, 512),
+        self.linear_q = nn.Sequential(nn.Linear(dim, dim),
                                       nn.GELU(),
                                       nn.Dropout(dropout),
-                                      nn.Linear(512, 2048),
+                                      nn.Linear(dim, 4 * dim),
                                       nn.Dropout(dropout))
         
-        self.linear_k = nn.Sequential(nn.Linear(512, 512),
+        self.linear_k = nn.Sequential(nn.Linear(dim, dim),
                                       nn.GELU(),
                                       nn.Dropout(dropout),
-                                      nn.Linear(512, 2048),
+                                      nn.Linear(dim, 4 * dim),
                                       nn.Dropout(dropout))
         
-        self.tokens = nn.Parameter(torch.randn(49, 512),
+        self.tokens = nn.Parameter(torch.randn(num_tokens, learnable_dim),
                                    requires_grad=True)
         
         
-        self.proj = nn.Linear(512, 512)
+        self.proj = nn.Linear(learnable_dim, dim)
         
         self.has_sparse_res = has_sparse_res
         
         if self.has_sparse_res:
-            self.sparse_residual = SparseResidual(512, 0.5)
+            self.sparse_residual = SparseResidual(dim, 0.5)
         
         self.num_heads = 32
         
@@ -176,9 +219,97 @@ class InLay(nn.Module):
         
         return out
 
+class InLayWithMem(InLay):
+    def __init__(self, dim=512, num_tokens=49, learnable_dim=512, 
+                 has_sparse_res=False, dropout=0.0) -> None:
+        super().__init__(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim,
+                         has_sparse_res=has_sparse_res, dropout=dropout)
+                        
+        self.memory_reader = nn.MultiheadAttention(512, num_heads=8, kdim=512, vdim=512,
+                                                   batch_first=True)
+        
+        self.memory = nn.Parameter(torch.randn(32, 512),
+                                   requires_grad=True)
+        
+        
+    
+    def forward(self, x):
+        B = x.size(0)
+        memory = self.memory.unsqueeze(0).repeat(B, 1, 1)
+
+        internal = super().forward(x)
+        prototype, _ = self.memory_reader(x, memory, memory)
+        
+        return internal + prototype, (prototype, x.detach())
+        
+
+class AttentionWithQuantize(InLay):
+    def __init__(self, dim=512, num_tokens=49, learnable_dim=512, 
+                 has_sparse_res=False, dropout=0.0) -> None:
+        super().__init__(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim,
+                         has_sparse_res=has_sparse_res, dropout=dropout)
+        self.quant = Quantization(n=16, dim=512)
+    
+    def forward(self, x):
+        internal = super().forward(x)
+        codebook, additional_out = self.quant(x)
+        
+        return internal + codebook, additional_out
+
+# class AttentionWithQuantize(InLay):
+#     def __init__(self, dim=512, num_tokens=49, learnable_dim=512, 
+#                  has_sparse_res=False, dropout=0.0) -> None:
+#         super().__init__(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim,
+#                          has_sparse_res=has_sparse_res, dropout=dropout)
+#         self.quant = Quantization(n=16, dim=512)
+#         del self.tokens
+    
+#     def process_tokens(self, x):
+#         tokens, additional_out = self.quant(x)
+
+#         return tokens, additional_out
+    
+    
+#     def forward(self, x):
+#         tokens, additional_out = self.process_tokens(x)
+        
+#         out = self.inLay(x, tokens)
+#         return out, additional_out
+
+class Quantization(nn.Module):
+    def __init__(self, n=128, dim=512):
+        super().__init__()
+        self.n = n
+        self.code_book = nn.Parameter(torch.randn(self.n, dim),
+                                      requires_grad=True)    
+    
+        self.enc = nn.Linear(dim, dim)
+    
+    def forward(self, x):
+        original_shape = x.size()
+        x = x.view(-1, x.size(-1))
+        B = x.size(0)
+        z = self.enc(x)
+        
+        code_book = self.code_book.unsqueeze(0).repeat(B, 1, 1)
+        distance = torch.norm(z.unsqueeze(1) - code_book, dim=-1)
+        _, argmin = distance.min(-1)
+        
+        mask = torch.zeros(B, self.n, device=x.device).scatter_(1, argmin.unsqueeze(1), 1).unsqueeze(-1).bool()
+        q = torch.masked_select(code_book, mask).reshape(B, -1)
+        
+        q = z + (q - z).detach()
+        
+        return q.reshape(original_shape), (q, z)
+
+
+
 class SelectiveInLay(InLay):
-    def __init__(self, has_sparse_res=False, dropout=0) -> None:
-        super().__init__(has_sparse_res, dropout)       
+    def __init__(self, dim=512, num_tokens=49, learnable_dim=512, 
+                 has_sparse_res=False, dropout=0.0) -> None:
+        super().__init__(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim,
+                         has_sparse_res=has_sparse_res, dropout=dropout)
+
         del self.tokens
          
         self.ignore_token = nn.Parameter(torch.randn(1, 512),
@@ -216,43 +347,48 @@ class SelectiveInLay(InLay):
         return out
 
 class InLayFuse(InLay):
-    def __init__(self, has_sparse_res=False, dropout=0.1) -> None:
-        super().__init__(has_sparse_res, dropout)
-        self.linear_v = nn.Linear(512, 512)
-        self.proj_v = nn.Linear(512, 512)
+    def __init__(self, dim=512, num_tokens=49, learnable_dim=512, 
+                 has_sparse_res=False, dropout=0.0) -> None:
+        super().__init__(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim,
+                         has_sparse_res=has_sparse_res, dropout=dropout)
 
-        if self.has_sparse_res:
-            self.sparse_residual = SparseResidual(512, 0.0)
+        # self.linear_v = nn.Linear(512, 512)
+        # self.proj_v = nn.Linear(512, 512)
+
+        self.sparse_residual = SparseResidual(512, 0.0)
         
-    def inLay(self, x, tokens):
-        adjacency_matrix = self.compute_adjacency(x)
-        v = reshape_to_batch(self.linear_v(x), self.num_heads)
+    # def inLay(self, x, tokens):
+    #     adjacency_matrix = self.compute_adjacency(x)
         
-        tokens = self.proj(self.apply_adj(adjacency_matrix, tokens))
-        v = self.proj_v(self.apply_adj(adjacency_matrix, v))
+    #     tokens = self.proj(self.apply_adj(adjacency_matrix, tokens))
+    #     v = self.proj_v(self.apply_adj(adjacency_matrix, self.linear_v(x)))
         
-        return tokens, v
+    #     return tokens, v
     
-    def forward(self, x):
-        tokens = self.process_tokens(x)
-        tokens, v = self.inLay(x, tokens)
+    # def forward(self, x):
+    #     tokens = self.process_tokens(x)
+    #     tokens, v = self.inLay(x, tokens)
         
-        tokens = self.sparse_residual(tokens, v)
+    #     out = self.sparse_residual(tokens, v.detach())
             
-        return tokens, (tokens, )
+    #     return out, (tokens.detach(), out)
 
-         
-
+    def forward(self, x):        
+        tokens = self.process_tokens(x)
         
+        tokens = self.inLay(x, tokens)
         
+        out = self.sparse_residual(tokens, x.detach())
         
-        
-        
+        return out, (tokens.detach(), out)
 
 
 class InLayRel(InLay):
-    def __init__(self, has_sparse_res=False, dropout=0.0) -> None:
-        super().__init__(has_sparse_res, dropout)
+    def __init__(self, dim=512, num_tokens=49, learnable_dim=512, 
+                 has_sparse_res=False, dropout=0.0) -> None:
+        super().__init__(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim,
+                         has_sparse_res=has_sparse_res, dropout=dropout)
+
         self.tokens = None
         rpe_config = get_rpe_config(
             ratio=1.9,
@@ -298,20 +434,35 @@ class AVGPool1D(nn.Module):
     
     
 class CustomAttention(Backbone):
-    def __init__(self, type="inLay", has_sparse_res=False) -> None:
+    def __init__(self, img_size=224, resnet_out_layer=4, learnable_dim=512, type="inLay", has_sparse_res=False) -> None:
         super().__init__()
-        self.resnet = ResnetFeature(block=BasicBlock, layers=[2, 2, 2, 2])
+        self.resnet = ResnetFeature(img_size=img_size, cp_layer=resnet_out_layer, block=BasicBlock, layers=[2, 2, 2, 2])
+        dim = self.resnet.out_dim
+        num_tokens = self.resnet.num_tokens
+        
         init_pretrained_weights(self.resnet, model_urls["resnet18"])
 
-        self._out_features = 512
-        self.layernorm = nn.LayerNorm(512)
+        self._out_features = dim
+        self.layernorm = nn.LayerNorm(dim)
         
         if type == "inlay":
-            self.attn = InLay(has_sparse_res=has_sparse_res)
+            self.attn = InLay(dim=dim, num_tokens=num_tokens, 
+                              has_sparse_res=has_sparse_res, learnable_dim=learnable_dim)
         elif type == "inlay_rel":
-            self.attn = InLayRel(has_sparse_res=has_sparse_res)
+            self.attn = InLayRel(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim, 
+                                 has_sparse_res=has_sparse_res)
         elif type == "inlay_selective":
-            self.attn = SelectiveInLay(has_sparse_res=has_sparse_res)
+            self.attn = SelectiveInLay(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim, 
+                                       has_sparse_res=has_sparse_res)
+        elif type == "inlay_fuse":
+            self.attn = InLayFuse(dim=dim, num_tokens=num_tokens, 
+                              has_sparse_res=has_sparse_res, learnable_dim=learnable_dim)
+        elif type == "inlay_mem":
+            self.attn = InLayWithMem(dim=dim, num_tokens=num_tokens,
+                                     has_sparse_res=has_sparse_res, learnable_dim=learnable_dim)
+        elif type == "inlay_quant":
+            self.attn = AttentionWithQuantize(dim=dim, num_tokens=num_tokens, 
+                                              has_sparse_res=has_sparse_res, learnable_dim=learnable_dim)
         elif type == "attention":
             self.attn = Attention()
         elif type == "attentioninlay":
@@ -326,8 +477,8 @@ class CustomAttention(Backbone):
         out = self.attn(self.layernorm(self.resnet(x)))
         
         if type(out) == tuple:
-            out, tokens = out
-            return self.avgpool(out), tokens
+            out, additional_out = out
+            return self.avgpool(out), additional_out
         else:
             return self.avgpool(out)
         
@@ -349,22 +500,27 @@ class AttentionInLay(nn.Module):
         super().__init__()
         self.tokens = nn.Parameter(torch.randn(49, 512),
                                    requires_grad=True)
-        self.attn = nn.MultiheadAttention(embed_dim=512, num_heads=8, batch_first=True)
+        self.attn_internal = nn.MultiheadAttention(embed_dim=512, num_heads=16, batch_first=True)
+        self.attn_external = nn.MultiheadAttention(embed_dim=512, num_heads=8, batch_first=True)
         # self.lowrank_attn = LowrankAttn()
-        self.sparse_residual = SparseResidual(512, 0.0)
+        self.layernorm = nn.LayerNorm(512)
         self.proj = nn.Identity()
 
     def forward(self, x):
+        print(x.shape)
         B = x.size(0)
         tokens = self.tokens.unsqueeze(0).repeat(B, 1, 1)
-        out1, weight = self.attn(x, x, x)
-        out2 = weight.matmul(tokens)
-        x = self.sparse_residual(out2, out1)
+        internal, _ = self.attn_internal(x, x, tokens)
+        attended, _ = self.attn_external(self.layernorm(internal), x, x)
         
-        return self.proj(x), (out2, x)
+        return self.proj(attended + internal)
         
 
 @BACKBONE_REGISTRY.register()
 def ind(cfg, **kwargs):
-    model = CustomAttention(type=cfg.ATTN.TYPE, has_sparse_res=cfg.ATTN.SPARSE_RES)
+    model = CustomAttention(img_size=cfg.ATTN.IMG_SIZE,
+                            resnet_out_layer=cfg.ATTN.RESNET_OUT_LAYER,
+                            learnable_dim=cfg.ATTN.LEARNABLE_DIM, 
+                            type=cfg.ATTN.TYPE, 
+                            has_sparse_res=cfg.ATTN.SPARSE_RES)
     return model

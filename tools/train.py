@@ -51,6 +51,16 @@ def reset_cfg(cfg, args):
 
     if args.attn:
         cfg.MODEL.BACKBONE.ATTN.TYPE = args.attn
+        
+    if args.resnet_layer:
+        cfg.MODEL.BACKBONE.ATTN.RESNET_OUT_LAYER = args.resnet_layer
+        
+    if args.learnable_dim:
+        cfg.MODEL.BACKBONE.ATTN.LEARNABLE_DIM = args.learnable_dim
+        
+    if args.img_size:
+        cfg.MODEL.BACKBONE.ATTN.IMG_SIZE = args.img_size
+        
     cfg.MODEL.BACKBONE.ATTN.SPARSE_RES = args.sparse_res
 
     if args.head:
@@ -71,6 +81,9 @@ def extend_cfg(cfg):
     cfg.MODEL.BACKBONE.ATTN = CN()
     cfg.MODEL.BACKBONE.ATTN.TYPE = "inlay"
     cfg.MODEL.BACKBONE.ATTN.SPARSE_RES = False
+    cfg.MODEL.BACKBONE.ATTN.LEARNABLE_DIM = 512
+    cfg.MODEL.BACKBONE.ATTN.RESNET_OUT_LAYER = 4
+    cfg.MODEL.BACKBONE.ATTN.IMG_SIZE = 224
 
 
 def setup_cfg(args):
@@ -177,6 +190,17 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--sparse_res", action="store_true", help="inLay has sparse residual"
+    )
+    
+    parser.add_argument(
+        "--learnable_dim", type=int, help="the dimension of the learnable values in inlay"
+    )
+    parser.add_argument(
+        "--resnet_layer", type=int, help="which resnet layer that we get the features from"
+    )
+    
+    parser.add_argument(
+        "--img_size", type=int, help="img size"
     )
 
     

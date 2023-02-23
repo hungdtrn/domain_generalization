@@ -4,5 +4,7 @@
 #SBATCH --partition=gpu
 #SBATCH --mincpus=8
 
+source ~/.bashrc
+conda activate dassl
 echo $@
 $@
