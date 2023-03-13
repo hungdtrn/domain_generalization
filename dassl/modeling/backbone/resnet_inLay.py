@@ -1,4 +1,5 @@
 import math
+from turtle import forward
 
 import torch
 import torch.nn as nn
@@ -89,6 +90,12 @@ class ResnetFeature(ResNet):
             self.num_tokens = (img_size // 8) ** 2
             del self.layer3
             del self.layer4
+        elif self.cp_layer == 1:
+            self.out_dim = 64
+            self.num_tokens = (img_size // 4) ** 2
+            del self.layer3
+            del self.layer2
+            del self.layer4
         else:
             raise Exception("Parameter is not correct")  
         
@@ -100,16 +107,18 @@ class ResnetFeature(ResNet):
         x = self.layer1(x)
         if "layer1" in self.ms_layers:
             x = self.mixstyle(x)
-        x = self.layer2(x)
         
-        if self.cp_layer >= 3:
+        if self.cp_layer >= 2:
+            x = self.layer2(x)
             if "layer2" in self.ms_layers:
                 x = self.mixstyle(x)
+
+        if self.cp_layer >= 3:
             x = self.layer3(x)
-            
-        if self.cp_layer >= 4:            
             if "layer3" in self.ms_layers:
                 x = self.mixstyle(x)
+
+        if self.cp_layer >= 4:            
             x = self.layer4(x)
 
         return x
@@ -145,10 +154,26 @@ class SparseResidual(nn.Module):
         # print(mask)
         return tokens * (1 - mask) + mask * self.mlp(x)
         
+class BinaryResidual(nn.Module):
+    def __init__(self, embed_dim, thresh) -> None:
+        super().__init__()
+        
+        self.mask_embedding = nn.Sequential(nn.Linear(embed_dim * 2, embed_dim))
+        self.thresh = 0.5
+    
+    def forward(self, tokens, x):
+        mask = self.mask_embedding(torch.cat([tokens, x], -1))
+        mask = torch.sigmoid(mask)
+        mask_binary = (mask > self.thresh).float()
+        
+        # Straight through gradient
+        mask_binary = mask_binary + mask - mask.detach()
+        return tokens + mask_binary * x
+
 
 class InLay(nn.Module):
     def __init__(self, dim=512, num_tokens=49, learnable_dim=512, 
-                 has_sparse_res=False, dropout=0.0) -> None:
+                 residual_type=0, dropout=0.0) -> None:
         super().__init__()
         
         self.linear_q = nn.Sequential(nn.Linear(dim, dim),
@@ -169,11 +194,13 @@ class InLay(nn.Module):
         
         self.proj = nn.Linear(learnable_dim, dim)
         
-        self.has_sparse_res = has_sparse_res
+        self.residual_type = residual_type
         
-        if self.has_sparse_res:
+        if self.residual_type == 1:
             self.sparse_residual = SparseResidual(dim, 0.5)
         
+        elif self.residual_type == 2:
+            self.sparse_residual = BinaryResidual(dim, 0.5)
         self.num_heads = 32
         
     def process_tokens(self, x):
@@ -214,16 +241,16 @@ class InLay(nn.Module):
         
         out = self.inLay(x, tokens)
         
-        if self.has_sparse_res:
+        if self.residual_type != 0:
             out = self.sparse_residual(out, x)
         
         return out
 
 class InLayWithMem(InLay):
     def __init__(self, dim=512, num_tokens=49, learnable_dim=512, 
-                 has_sparse_res=False, dropout=0.0) -> None:
+                 residual_type=0, dropout=0.0) -> None:
         super().__init__(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim,
-                         has_sparse_res=has_sparse_res, dropout=dropout)
+                         residual_type=residual_type, dropout=dropout)
                         
         self.memory_reader = nn.MultiheadAttention(512, num_heads=8, kdim=512, vdim=512,
                                                    batch_first=True)
@@ -245,9 +272,9 @@ class InLayWithMem(InLay):
 
 class AttentionWithQuantize(InLay):
     def __init__(self, dim=512, num_tokens=49, learnable_dim=512, 
-                 has_sparse_res=False, dropout=0.0) -> None:
+                 residual_type=0, dropout=0.0) -> None:
         super().__init__(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim,
-                         has_sparse_res=has_sparse_res, dropout=dropout)
+                         residual_type=residual_type, dropout=dropout)
         self.quant = Quantization(n=16, dim=512)
     
     def forward(self, x):
@@ -258,9 +285,9 @@ class AttentionWithQuantize(InLay):
 
 # class AttentionWithQuantize(InLay):
 #     def __init__(self, dim=512, num_tokens=49, learnable_dim=512, 
-#                  has_sparse_res=False, dropout=0.0) -> None:
+#                  residual_type=0, dropout=0.0) -> None:
 #         super().__init__(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim,
-#                          has_sparse_res=has_sparse_res, dropout=dropout)
+#                          residual_type=residual_type, dropout=dropout)
 #         self.quant = Quantization(n=16, dim=512)
 #         del self.tokens
     
@@ -306,9 +333,9 @@ class Quantization(nn.Module):
 
 class SelectiveInLay(InLay):
     def __init__(self, dim=512, num_tokens=49, learnable_dim=512, 
-                 has_sparse_res=False, dropout=0.0) -> None:
+                 residual_type=0, dropout=0.0) -> None:
         super().__init__(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim,
-                         has_sparse_res=has_sparse_res, dropout=dropout)
+                         residual_type=residual_type, dropout=dropout)
 
         del self.tokens
          
@@ -341,16 +368,16 @@ class SelectiveInLay(InLay):
         
         out = self.inLay(self.layernorm(x), tokens)
         
-        if self.has_sparse_res:
+        if self.residual_type != 0:
             out = self.sparse_residual(out, x)
         
         return out
 
 class InLayFuse(InLay):
     def __init__(self, dim=512, num_tokens=49, learnable_dim=512, 
-                 has_sparse_res=False, dropout=0.0) -> None:
+                 residual_type=0, dropout=0.0) -> None:
         super().__init__(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim,
-                         has_sparse_res=has_sparse_res, dropout=dropout)
+                         residual_type=residual_type, dropout=dropout)
 
         # self.linear_v = nn.Linear(512, 512)
         # self.proj_v = nn.Linear(512, 512)
@@ -382,12 +409,11 @@ class InLayFuse(InLay):
         
         return out, (tokens.detach(), out)
 
-
 class InLayRel(InLay):
     def __init__(self, dim=512, num_tokens=49, learnable_dim=512, 
-                 has_sparse_res=False, dropout=0.0) -> None:
+                 residual_type=0, dropout=0.0) -> None:
         super().__init__(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim,
-                         has_sparse_res=has_sparse_res, dropout=dropout)
+                         residual_type=residual_type, dropout=dropout)
 
         self.tokens = None
         rpe_config = get_rpe_config(
@@ -432,9 +458,22 @@ class AVGPool1D(nn.Module):
         B, N, D = ind.size()
         return ind.mean(1)
     
+class InLayAttention(InLay):
+    def __init__(self, dim=512, num_tokens=49, learnable_dim=512, residual_type=0, dropout=0) -> None:
+        super().__init__(dim, num_tokens, learnable_dim, residual_type, dropout)
+        
+        self.after_attn = nn.MultiheadAttention(dim, 8, batch_first=True)
+        self.layer_norm_after = nn.LayerNorm(512)
+    
+    def forward(self, x):
+        out = super().forward(x)
+        x = self.layer_norm_after(x)
+        x = self.after_attn(x, x, x)[0]
+        
+        return out + x
     
 class CustomAttention(Backbone):
-    def __init__(self, img_size=224, resnet_out_layer=4, learnable_dim=512, type="inLay", has_sparse_res=False) -> None:
+    def __init__(self, img_size=224, resnet_out_layer=4, learnable_dim=512, type="inLay", residual_type=0) -> None:
         super().__init__()
         self.resnet = ResnetFeature(img_size=img_size, cp_layer=resnet_out_layer, block=BasicBlock, layers=[2, 2, 2, 2])
         dim = self.resnet.out_dim
@@ -445,28 +484,29 @@ class CustomAttention(Backbone):
         self._out_features = dim
         self.layernorm = nn.LayerNorm(dim)
         
+        attn_class = None
         if type == "inlay":
-            self.attn = InLay(dim=dim, num_tokens=num_tokens, 
-                              has_sparse_res=has_sparse_res, learnable_dim=learnable_dim)
+            attn_class = InLay
         elif type == "inlay_rel":
-            self.attn = InLayRel(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim, 
-                                 has_sparse_res=has_sparse_res)
+            attn_class = InLayRel
         elif type == "inlay_selective":
-            self.attn = SelectiveInLay(dim=dim, num_tokens=num_tokens, learnable_dim=learnable_dim, 
-                                       has_sparse_res=has_sparse_res)
+            attn_class = SelectiveInLay
+        elif type == "inlay_attn":
+            attn_class = InLayAttention
         elif type == "inlay_fuse":
-            self.attn = InLayFuse(dim=dim, num_tokens=num_tokens, 
-                              has_sparse_res=has_sparse_res, learnable_dim=learnable_dim)
+            attn_class = InLayFuse
         elif type == "inlay_mem":
-            self.attn = InLayWithMem(dim=dim, num_tokens=num_tokens,
-                                     has_sparse_res=has_sparse_res, learnable_dim=learnable_dim)
+            attn_class = InLayWithMem
         elif type == "inlay_quant":
-            self.attn = AttentionWithQuantize(dim=dim, num_tokens=num_tokens, 
-                                              has_sparse_res=has_sparse_res, learnable_dim=learnable_dim)
+            attn_class = AttentionWithQuantize
         elif type == "attention":
-            self.attn = Attention()
+            self.attn = Attention(dim=dim)
         elif type == "attentioninlay":
             self.attn = AttentionInLay()
+            
+        if type not in ["attention", "attentioninlay"]:
+            self.attn = attn_class(dim=dim, num_tokens=num_tokens, 
+                              residual_type=residual_type, learnable_dim=learnable_dim)
 
         self.avgpool = AVGPool2D()
         if type == "inlay_selective":
@@ -487,9 +527,9 @@ class CustomAttention(Backbone):
         return self.attn.get_thresh()
             
 class Attention(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, dim=512) -> None:
         super().__init__()
-        self.attn = nn.MultiheadAttention(512, num_heads=8, batch_first=True)
+        self.attn = nn.MultiheadAttention(dim, num_heads=8, batch_first=True)
         
     def forward(self, x):
         x = self.attn(x, x, x)[0]
@@ -522,5 +562,5 @@ def ind(cfg, **kwargs):
                             resnet_out_layer=cfg.ATTN.RESNET_OUT_LAYER,
                             learnable_dim=cfg.ATTN.LEARNABLE_DIM, 
                             type=cfg.ATTN.TYPE, 
-                            has_sparse_res=cfg.ATTN.SPARSE_RES)
+                            residual_type=cfg.ATTN.RESIDUAL_TYPE)
     return model

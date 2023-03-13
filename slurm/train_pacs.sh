@@ -2,10 +2,10 @@
 #!/bin/bash
 
 data_name="pacs"
-model_name="inlay_sparse_new"
+model_name="inlay_binary_sparse"
 data_cfg_file="configs/datasets/dg/pacs.yaml"
 cfg_file="configs/trainers/dg/vanilla/pacs.yaml"
-other_cfg="--backbone ind --attn inlay --sparse_res --seed 1802"
+other_cfg="--backbone ind --attn inlay --residual_type 2 --seed 1802"
 # other_cfg="--backbone ind --attn inlay --sparse_res --learnable_dim 32 --seed 1802"
 
 domains=("art_painting" "cartoon" "photo" "sketch")

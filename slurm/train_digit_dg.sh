@@ -2,10 +2,10 @@
 #!/bin/bash
 
 data_name="digit_dg"
-model_name="inlay_sparse_new"
+model_name="inlay_binary_sparse"
 data_cfg_file="configs/datasets/dg/digits_dg.yaml"
 cfg_file="configs/trainers/dg/vanilla/digits_dg.yaml"
-other_cfg="--backbone ind --attn inlay --sparse_residual --resnet_layer 2 --img_size 32 --seed 1802"
+other_cfg="--backbone ind --attn inlay --residual_type 2 --resnet_layer 2 --img_size 32 --seed 1802"
 domains=("mnist" "mnist_m" "svhn" "syn")
 
 for dst in ${domains[@]}; do

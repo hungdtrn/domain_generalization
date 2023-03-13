@@ -1,12 +1,12 @@
 
 #!/bin/bash
 
-data_name="office_home"
-model_name="inlay_binary_sparse"
-data_cfg_file="configs/datasets/dg/office_home_dg.yaml"
-cfg_file="configs/trainers/dg/vanilla/office_home_dg.yaml"
-other_cfg="--backbone ind --attn inlay --residual_type 2 --seed 1802"
-domains=("art" "clipart" "product" "real_world")
+data_name="digit_dg_new"
+model_name="resnet"
+data_cfg_file="configs/datasets/dg/digits_dg_new.yaml"
+cfg_file="configs/trainers/dg/vanilla/digits_dg.yaml"
+other_cfg="--resnet_layer 2 --img_size 32 --seed 1802"
+domains=("mnist" "mnist_m" "svhn" "syn")
 
 for dst in ${domains[@]}; do
     src=""
@@ -23,6 +23,6 @@ for dst in ${domains[@]}; do
 
     echo $script 
     sbatch slurm/slurm.sh $script
-    
+
     sleep 3
 done

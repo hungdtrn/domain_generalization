@@ -6,26 +6,19 @@ from dassl.metrics import compute_accuracy
 
 
 @TRAINER_REGISTRY.register()
-class VanillaWithReg(TrainerX):
+class VanillaWithDomain(TrainerX):
     """Vanilla model.
     
     A.k.a. Empirical Risk Minimization, or ERM.
     """
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.num_domains = 4
 
     def forward_backward(self, batch):
-        input, target = self.parse_batch_train(batch)
-        output, (_, (tokens, feature)) = self.model(input, return_feature=True)  
-                
-        # reg_loss = F.mse_loss(tokens, feature)
-        
-
-        # output, (_, (a, b)) = self.model(input, return_feature=True)
-        # reg_loss = torch.mean((a.detach() - b)**2) + torch.mean(a - b.detach()**2)
-        
-        print(reg_loss)
-        labmda_reg = 0.1
-        
-        loss = F.cross_entropy(output, target) + reg_loss * labmda_reg
+        input, domain, target = self.parse_batch_train(batch)
+        output = self.model((input, domain))
+        loss = F.cross_entropy(output, target)
         self.model_backward_and_update(loss)
 
         loss_summary = {
@@ -41,6 +34,20 @@ class VanillaWithReg(TrainerX):
     def parse_batch_train(self, batch):
         input = batch["img"]
         target = batch["label"]
+        domain = batch["domain"]
+
         input = input.to(self.device)
         target = target.to(self.device)
-        return input, target
+        domain = domain.to(self.device)
+
+        return input, domain, target
+    
+    def parse_batch_test(self, batch):
+        input = batch["img"]
+        label = batch["label"]
+        domain = None
+
+        input = input.to(self.device)
+        label = label.to(self.device)
+
+        return (input, domain), label

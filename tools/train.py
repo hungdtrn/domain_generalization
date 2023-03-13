@@ -61,7 +61,7 @@ def reset_cfg(cfg, args):
     if args.img_size:
         cfg.MODEL.BACKBONE.ATTN.IMG_SIZE = args.img_size
         
-    cfg.MODEL.BACKBONE.ATTN.SPARSE_RES = args.sparse_res
+    cfg.MODEL.BACKBONE.ATTN.RESIDUAL_TYPE = args.residual_type
 
     if args.head:
         cfg.MODEL.HEAD.NAME = args.head
@@ -80,7 +80,7 @@ def extend_cfg(cfg):
     """
     cfg.MODEL.BACKBONE.ATTN = CN()
     cfg.MODEL.BACKBONE.ATTN.TYPE = "inlay"
-    cfg.MODEL.BACKBONE.ATTN.SPARSE_RES = False
+    cfg.MODEL.BACKBONE.ATTN.RESIDUAL_TYPE = 0
     cfg.MODEL.BACKBONE.ATTN.LEARNABLE_DIM = 512
     cfg.MODEL.BACKBONE.ATTN.RESNET_OUT_LAYER = 4
     cfg.MODEL.BACKBONE.ATTN.IMG_SIZE = 224
@@ -189,7 +189,7 @@ if __name__ == "__main__":
         "--attn", type=str, default="", help="name of the attention type"
     )
     parser.add_argument(
-        "--sparse_res", action="store_true", help="inLay has sparse residual"
+        "--residual_type", type=int, default=0, help="inLay has sparse residual"
     )
     
     parser.add_argument(
